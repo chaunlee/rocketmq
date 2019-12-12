@@ -149,30 +149,42 @@ public class AllocateMappedFileService extends ServiceThread {
 
     /**
      * Only interrupted by the external thread, will return false
+     * 在AllocateMappedFileService.run()中,如果没有外部线程将stopped变量置为true,则会不间断的执行私有方法mmapOperation()。
+     * 该方法的作用是不断异步地从任务队列里取出请求生成对应的MappedFile，用于AllocateMappedFileService提供的另一个获取MappedFild方法快速获取结果
      */
     private boolean mmapOperation() {
         boolean isSuccess = false;
         AllocateRequest req = null;
         try {
+            // requestQueue是个优先级的无界阻塞队列,
+            // 其中的元素类型为AllocateRequest，
+            // 根据实现可以看到请求的fileSize越大优先级越高
+            // 如果size相同，则根据文件名比较物理偏移量，偏移量越小优先级越高
             req = this.requestQueue.take();
             AllocateRequest expectedRequest = this.requestTable.get(req.getFilePath());
             if (null == expectedRequest) {
                 log.warn("this mmap request expired, maybe cause timeout " + req.getFilePath() + " "
                     + req.getFileSize());
+                // 遇到超时删除了请求
                 return true;
             }
             if (expectedRequest != req) {
                 log.warn("never expected here,  maybe cause timeout " + req.getFilePath() + " "
                     + req.getFileSize() + ", req:" + req + ", expectedRequest:" + expectedRequest);
+                // 异常情况，可能是超时导致queue与table里的request不对应了
                 return true;
             }
 
             if (req.getMappedFile() == null) {
                 long beginTime = System.currentTimeMillis();
-
+                // 创建文件
                 MappedFile mappedFile;
+                // 两种生成MappedFile的方式
+                // isTransientStorePoolEnable设置为true且刷盘方式为异步刷盘
+                // TransientStorePool的使用是数据先写入堆外内存，然后异步刷新到磁盘持久化
                 if (messageStore.getMessageStoreConfig().isTransientStorePoolEnable()) {
                     try {
+                        // 通过ServiceLoader的方式起一个MappedFile并init初始化
                         mappedFile = ServiceLoader.load(MappedFile.class).iterator().next();
                         mappedFile.init(req.getFilePath(), req.getFileSize(), messageStore.getTransientStorePool());
                     } catch (RuntimeException e) {
@@ -190,11 +202,14 @@ public class AllocateMappedFileService extends ServiceThread {
                         + " " + req.getFilePath() + " " + req.getFileSize());
                 }
 
+                // 新生成的mappedFile大小至少有MapedFileSizeCommitLog配置的那么大
+                // 且配置了warmMappedFile = true, 则对该mappedFile进行warmup,具体实现看后面代码解析
                 // pre write mappedFile
                 if (mappedFile.getFileSize() >= this.messageStore.getMessageStoreConfig()
                     .getMapedFileSizeCommitLog()
                     &&
                     this.messageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
+                    // 文件预热
                     mappedFile.warmMappedFile(this.messageStore.getMessageStoreConfig().getFlushDiskType(),
                         this.messageStore.getMessageStoreConfig().getFlushLeastPagesWhenWarmMapedFile());
                 }
@@ -219,6 +234,7 @@ public class AllocateMappedFileService extends ServiceThread {
             }
         } finally {
             if (req != null && isSuccess)
+                // 获取MappedFile的方法处会等待这个值进行同步
                 req.getCountDownLatch().countDown();
         }
         return true;

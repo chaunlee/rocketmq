@@ -199,6 +199,7 @@ public class IndexService {
     }
 
     public void buildIndex(DispatchRequest req) {
+        // 最多尝试三次获取最后一个非空IndexFile,如果没有或者最后一个写满则生成一个新的
         IndexFile indexFile = retryGetAndCreateIndexFile();
         if (indexFile != null) {
             long endPhyOffset = indexFile.getEndPhyOffset();
@@ -220,6 +221,7 @@ public class IndexService {
             }
 
             if (req.getUniqKey() != null) {
+                // 在IndexFile中写入Topic#UniqKey与CommitLogOffset的关联
                 indexFile = putKey(indexFile, msg, buildKey(topic, req.getUniqKey()));
                 if (indexFile == null) {
                     log.error("putKey error commitlog {} uniqkey {}", req.getCommitLogOffset(), req.getUniqKey());
@@ -232,6 +234,7 @@ public class IndexService {
                 for (int i = 0; i < keyset.length; i++) {
                     String key = keyset[i];
                     if (key.length() > 0) {
+                        // 每个key在IndexFile中写入Topic#Key与CommitLogOffset的关联
                         indexFile = putKey(indexFile, msg, buildKey(topic, key));
                         if (indexFile == null) {
                             log.error("putKey error commitlog {} uniqkey {}", req.getCommitLogOffset(), req.getUniqKey());

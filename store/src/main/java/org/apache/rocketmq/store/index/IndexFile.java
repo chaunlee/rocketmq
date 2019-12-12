@@ -91,7 +91,9 @@ public class IndexFile {
 
     public boolean putKey(final String key, final long phyOffset, final long storeTimestamp) {
         if (this.indexHeader.getIndexCount() < this.indexNum) {
+
             int keyHash = indexKeyHashMethod(key);
+            // 根据key的hash取模获得槽的位置 hashSlotNum默认值为500w
             int slotPos = keyHash % this.hashSlotNum;
             int absSlotPos = IndexHeader.INDEX_HEADER_SIZE + slotPos * hashSlotSize;
 

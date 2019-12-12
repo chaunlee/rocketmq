@@ -41,6 +41,15 @@ import org.apache.rocketmq.store.config.FlushDiskType;
 import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
+/**
+ * http://www.daleizhou.tech/posts/rocketmq-store-commitlog.html
+ * @Description:减少了用户态和内核态的切换及少了一次文件复制的成本
+ * @auther: lichang
+ * @date: 14:24 2019/12/12
+ * @param:
+ * @return:
+ *
+ */
 public class MappedFile extends ReferenceResource {
     public static final int OS_PAGE_SIZE = 1024 * 4;
     protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
@@ -492,10 +501,15 @@ public class MappedFile extends ReferenceResource {
         ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
         int flush = 0;
         long time = System.currentTimeMillis();
+        // OS_PAGE_SIZE默认配置 1024 * 4
+        // fileSize默认配置 1024 * 1024 * 1024 = 1G
+        // 每隔OS_PAGE_SIZE写入一个0进行warmup, 减少后面os缺页中断
         for (int i = 0, j = 0; i < this.fileSize; i += MappedFile.OS_PAGE_SIZE, j++) {
             byteBuffer.put(i, (byte) 0);
             // force flush when flush disk type is sync
+            // pages 默认设置 = 1024 / 4 * 16
             if (type == FlushDiskType.SYNC_FLUSH) {
+                // 如果刷盘方式为同步刷盘，则每 pages 刷盘一次
                 if ((i / OS_PAGE_SIZE) - (flush / OS_PAGE_SIZE) >= pages) {
                     flush = i;
                     mappedByteBuffer.force();
@@ -513,7 +527,7 @@ public class MappedFile extends ReferenceResource {
                 }
             }
         }
-
+        // 最后强制flush一次
         // force flush when prepare load finished
         if (type == FlushDiskType.SYNC_FLUSH) {
             log.info("mapped file warm-up done, force to disk, mappedFile={}, costTime={}",
@@ -522,7 +536,7 @@ public class MappedFile extends ReferenceResource {
         }
         log.info("mapped file warm-up done. mappedFile={}, costTime={}", this.getFileName(),
             System.currentTimeMillis() - beginTime);
-
+        // 通过jna将内存页锁定在物理内存中，防止被放入swap分区
         this.mlock();
     }
 
@@ -550,9 +564,11 @@ public class MappedFile extends ReferenceResource {
         this.firstCreateInQueue = firstCreateInQueue;
     }
 
+    // LibC继承自com.sun.jna.Library，通过jna方法访问一些native的系统调用
     public void mlock() {
         final long beginTime = System.currentTimeMillis();
         final long address = ((DirectBuffer) (this.mappedByteBuffer)).address();
+        // jna
         Pointer pointer = new Pointer(address);
         {
             int ret = LibC.INSTANCE.mlock(pointer, new NativeLong(this.fileSize));
